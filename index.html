@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Intent Firewall — Read what you're about to sign</title>
+<style>
+  :root { --bg:#0b0e13; --panel:#131824; --line:#232c42; --txt:#e8ecf4; --dim:#9aa6bd;
+          --ok:#2fbf71; --warn:#f5a623; --crit:#e5484d; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--txt); }
+  .wrap { max-width:920px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  .sub { color:var(--dim); margin:0 0 6px; }
+  .tag { display:inline-block; font-size:12px; color:var(--dim); border:1px solid var(--line); border-radius:999px; padding:2px 10px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; margin:14px 0; }
+  label { font-weight:600; font-size:14px; display:block; margin-bottom:6px; }
+  textarea { width:100%; min-height:120px; background:#0d1119; color:var(--txt); border:1px solid var(--line);
+             border-radius:8px; padding:10px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; }
+  .row { display:flex; flex-wrap:wrap; gap:8px; margin:10px 0; }
+  button { cursor:pointer; border:1px solid var(--line); background:#1a2133; color:var(--txt);
+           border-radius:8px; padding:9px 14px; font-size:14px; }
+  button.primary { background:#2456d6; border-color:#2456d6; font-weight:700; }
+  button:hover { filter:brightness(1.15); }
+  #verdict { display:none; border-radius:12px; padding:16px; font-size:18px; font-weight:700; margin:14px 0; }
+  #verdict.ok { background:rgba(47,191,113,.13); border:1px solid var(--ok); }
+  #verdict.review { background:rgba(245,166,35,.13); border:1px solid var(--warn); }
+  #verdict.donot { background:rgba(229,72,77,.13); border:1px solid var(--crit); }
+  .finding { border-left:4px solid var(--line); padding:8px 12px; margin:8px 0; background:#0d1119; border-radius:0 8px 8px 0; }
+  .finding.critical { border-color:var(--crit); } .finding.warn { border-color:var(--warn); } .finding.info { border-color:#3a4a6b; }
+  .finding b { display:block; font-size:14.5px; }
+  .finding p { margin:3px 0 0; color:var(--dim); font-size:13.5px; line-height:1.45; }
+  .sev { font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+  .sev.critical { color:var(--crit); } .sev.warn { color:var(--warn); } .sev.info { color:var(--dim); }
+  .flows { display:flex; gap:12px; flex-wrap:wrap; }
+  .flow { flex:1; min-width:240px; background:#0d1119; border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .flow h3 { margin:0 0 6px; font-size:13px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; }
+  .flow div { font-size:14px; margin:2px 0; }
+  .muted { color:var(--dim); font-size:13px; }
+  a { color:#7aa5ff; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🛡️ Intent Firewall</h1>
+  <p class="sub">Read what you're about to sign. Paste a NEAR Intents payload — the exact message your wallet asks you to sign — and see what it really does before your signature exists.</p>
+  <span class="tag">Built for NEAR HACKATHON · Track: AI Security &amp; Defense</span>
+
+  <div class="card">
+    <label for="intent">1 · Intent payload (required)</label>
+    <textarea id="intent" placeholder='{"signer_id":"you.near","deadline":"2026-…","intents":[{"intent":"token_diff","diff":{…}}]}'></textarea>
+    <label for="quote" style="margin-top:12px;">2 · The 1Click quote you were shown (optional, enables cross-checks)</label>
+    <textarea id="quote" placeholder='{"quote":{…},"quoteRequest":{…}}'></textarea>
+    <div class="row">
+      <button class="primary" id="analyze">Analyze payload</button>
+      <button data-sample="safe">Sample: safe swap</button>
+      <button data-sample="suspicious">Sample: costly &amp; long-lived</button>
+      <button data-sample="drainer">Sample: drainer bundle</button>
+      <button data-sample="belowmin">Sample: below quote minimum</button>
+    </div>
+    <p class="muted" id="registryStatus">Token registry: loading…</p>
+  </div>
+
+  <div id="verdict"></div>
+  <div id="flows" class="flows"></div>
+  <div id="findings"></div>
+
+  <div class="card">
+    <b>What this checks</b>
+    <p class="muted">Decoding (incl. NEP-413 wrappers) · deadline sanity · bundled withdrawals and extra intents hiding inside a “swap” · unknown / unlisted assets · value in vs value out at live registry prices · cross-checks against the quote you were shown (wrong asset, wrong amount, below the guaranteed minimum, embedded app fees). This is a structure-and-economics check — it does not verify the signature itself, and it never asks for your keys. Everything runs locally in your browser; prices come from the public 1Click token list.</p>
+  </div>
+</div>
+
+<script src="src/firewall.js"></script>
+<script>
+(function () {
+  const FW = window.IntentFirewall;
+  const $ = (id) => document.getElementById(id);
+  let registry = new Map();
+
+  const USDC = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
+  const WNEAR = "nep141:wrap.near";
+  const USDC_ETH = "nep141:eth-0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48.omft.near";
+  const ETH = "nep141:eth.omft.near";
+
+  function rawForUsd(assetId, usd) {
+    const m = registry.get(assetId);
+    if (!m || !m.price) return "0";
+    const human = usd / m.price;
+    const head = Math.min(m.decimals, 15);
+    return (BigInt(Math.round(human * 10 ** head)) * 10n ** BigInt(m.decimals - head)).toString();
+  }
+  const inMin = (n) => new Date(Date.now() + n * 60000).toISOString();
+
+  const SAMPLE_QUOTE = {
+    quote: { amountIn: "10000000", amountInFormatted: "10.0", amountInUsd: "9.99484", amountOut: "4650232079580513", amountOutFormatted: "0.004650232079580513", amountOutUsd: "9.91764", minAmountOut: "4603729758784707", timeEstimate: 52 },
+    quoteRequest: { dry: false, depositType: "ORIGIN_CHAIN", depositMode: "SIMPLE", swapType: "EXACT_INPUT", slippageTolerance: 100, originAsset: USDC_ETH, destinationAsset: ETH, amount: "10000000", recipient: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", recipientType: "DESTINATION_CHAIN", refundTo: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", refundType: "ORIGIN_CHAIN", deadline: "2026-11-15T00:00:00.000Z", appFees: [{ recipient: "5880ad2b362620fadf759cbceb1cd5737ce8c6ed7fb8e9942881e6731f9247dd", fee: 20 }] },
+  };
+
+  const samples = {
+    safe: () => ({ intent: { signer_id: "alice.near", deadline: inMin(30),
+      intents: [{ intent: "token_diff", diff: { [USDC]: "-10000000", [WNEAR]: rawForUsd(WNEAR, 9.95) } }] }, quote: null }),
+    suspicious: () => ({ intent: { signer_id: "alice.near", deadline: inMin(60 * 24 * 7),
+      intents: [{ intent: "token_diff", diff: { [USDC]: "-10000000", [WNEAR]: rawForUsd(WNEAR, 9.79) } }] }, quote: null }),
+    drainer: () => ({ intent: { signer_id: "alice.near", deadline: inMin(-10),
+      intents: [
+        { intent: "token_diff", diff: { [USDC]: "-10000000", "nep141:scam-token.near": "999999999" } },
+        { intent: "ft_withdraw", receiver_id: "attacker.near", token: USDC, amount: "5000000" },
+      ] }, quote: null }),
+    belowmin: () => ({ intent: { signer_id: "bob.near", deadline: inMin(20),
+      intents: [{ intent: "token_diff", diff: { [USDC_ETH]: "-10000000", [ETH]: "4000000000000000" } }] }, quote: SAMPLE_QUOTE }),
+  };
+
+  document.querySelectorAll("[data-sample]").forEach((b) => {
+    b.addEventListener("click", () => {
+      const s = samples[b.dataset.sample]();
+      $("intent").value = JSON.stringify(s.intent, null, 2);
+      $("quote").value = s.quote ? JSON.stringify(s.quote, null, 2) : "";
+      run();
+    });
+  });
+  $("analyze").addEventListener("click", run);
+
+  function fmtFlow(list, title) {
+    if (!list || !list.length) return "";
+    const rows = list.map((e) => {
+      const amt = e.human != null ? e.human.toLocaleString("en-US", { maximumFractionDigits: 6 }) : e.raw;
+      const usd = e.usd != null ? " ≈ $" + e.usd.toFixed(2) : "";
+      return "<div>" + amt + " " + e.symbol + " <span class='muted'>(" + e.blockchain + ")" + usd + "</span></div>";
+    }).join("");
+    return "<div class='flow'><h3>" + title + "</h3>" + rows + "</div>";
+  }
+
+  function run() {
+    const quote = FW.tryParseQuote($("quote").value);
+    const r = FW.analyze($("intent").value, { registry, quote });
+    const v = $("verdict");
+    v.style.display = "block";
+    if (r.verdict === "DO_NOT_SIGN") { v.className = "donot"; v.textContent = "⛔ DO NOT SIGN — this payload can hurt you"; }
+    else if (r.verdict === "REVIEW") { v.className = "review"; v.textContent = "⚠️ REVIEW CAREFULLY — warnings below deserve your attention"; }
+    else { v.className = "ok"; v.textContent = "✅ LOOKS CONSISTENT — no red flags found in structure or economics"; }
+    v.id = "verdict";
+    $("flows").innerHTML = r.flows ? fmtFlow(r.flows.gives, "You give") + fmtFlow(r.flows.receives, "You receive") : "";
+    $("findings").innerHTML = r.findings.map((f) =>
+      "<div class='finding " + f.severity + "'><span class='sev " + f.severity + "'>" + f.severity + "</span><b>" +
+      f.title + "</b><p>" + f.detail + "</p></div>").join("");
+  }
+
+  // Registry: live from 1Click; the firewall degrades gracefully without it.
+  fetch("https://1click.chaindefuser.com/v0/tokens")
+    .then((res) => res.json())
+    .then((tokens) => {
+      registry = FW.buildRegistry(tokens);
+      $("registryStatus").textContent = "Token registry: live from 1Click (" + registry.size + " assets, USD prices included). Samples adapt to current prices.";
+    })
+    .catch(() => {
+      $("registryStatus").textContent = "Token registry: could not load the live 1Click list — decoding and structural checks still work, price-based checks are limited.";
+    });
+})();
+</script>
+</body>
+</html>
