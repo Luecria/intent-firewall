@@ -60,6 +60,7 @@ The test suite covers: a safe swap, a wide-spread/long-deadline swap, a drainer 
 
 - This is a **structure-and-economics** check. It does not verify the payload's signature and cannot judge whether the app showing you the payload is honest — it judges what the payload itself says.
 - Value checks depend on registry prices; an asset with no registry price is flagged as unknown rather than silently trusted.
+- Spread thresholds are heuristics: on illiquid or long cross-chain routes, a legitimate quote can show an effective spread above the 3% critical line. Treat a value-imbalance verdict as a demand to re-check the route and the quote — not as proof of a scam.
 - A "OK" verdict means *no red flags found*, not a guarantee of safety.
 
 ## Built with

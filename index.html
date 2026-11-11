@@ -133,6 +133,23 @@
   }
 
   function run() {
+    try {
+      runInner();
+    } catch (e) {
+      // The demo must never go blank: any unexpected failure is shown as
+      // a DO NOT SIGN verdict — the only safe answer for a payload that
+      // cannot be analyzed.
+      const v = $("verdict");
+      v.style.display = "block";
+      v.className = "donot";
+      v.textContent = "⛔ DO NOT SIGN — this payload could not be analyzed (" + (e && e.message ? e.message : e) + ")";
+      v.id = "verdict";
+      $("flows").innerHTML = "";
+      $("findings").innerHTML = "";
+    }
+  }
+
+  function runInner() {
     const quote = FW.tryParseQuote($("quote").value);
     const r = FW.analyze($("intent").value, { registry, quote });
     const v = $("verdict");
@@ -145,6 +162,9 @@
     $("findings").innerHTML = r.findings.map((f) =>
       "<div class='finding " + f.severity + "'><span class='sev " + f.severity + "'>" + f.severity + "</span><b>" +
       f.title + "</b><p>" + f.detail + "</p></div>").join("");
+    if ($("quote").value.trim() && !quote) {
+      $("findings").innerHTML += "<div class='finding warn'><span class='sev warn'>warn</span><b>Quote not recognized — cross-checks skipped</b><p>The text in box 2 is not a full 1Click quote response, so this payload was NOT cross-checked against any quote. Paste the complete response object (with both \"quote\" and \"quoteRequest\") to enable those checks.</p></div>";
+    }
   }
 
   // Registry: live from 1Click; the firewall degrades gracefully without it.
@@ -155,7 +175,17 @@
       $("registryStatus").textContent = "Token registry: live from 1Click (" + registry.size + " assets, USD prices included). Samples adapt to current prices.";
     })
     .catch(() => {
-      $("registryStatus").textContent = "Token registry: could not load the live 1Click list — decoding and structural checks still work, price-based checks are limited.";
+      // Live list unreachable: fall back to the bundled snapshot so the
+      // demo still runs with prices (they may be stale).
+      fetch("assets/tokens-snapshot.json")
+        .then((res) => res.json())
+        .then((tokens) => {
+          registry = FW.buildRegistry(tokens);
+          $("registryStatus").textContent = "Token registry: live 1Click list unreachable — using the bundled snapshot (2026-11-09, prices may be stale). All checks still run.";
+        })
+        .catch(() => {
+          $("registryStatus").textContent = "Token registry: could not load the live 1Click list — decoding and structural checks still work, price-based checks are limited.";
+        });
     });
 })();
 </script>
