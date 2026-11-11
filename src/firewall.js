@@ -81,6 +81,13 @@
     }
   }
 
+  // A diff amount must be a signed integer string ("-10000000"). Anything
+  // else ("abc", "1.5", an object) is malformed — hostile input must
+  // produce a finding, never an exception.
+  function isIntStr(s) {
+    return typeof s === "string" && /^-?\d+$/.test(s);
+  }
+
   // ------------------------------------------------------------------ amounts
   function toHuman(rawAmountStr, decimals) {
     // rawAmountStr is a signed integer string in the asset's smallest unit.
@@ -99,6 +106,24 @@
   const SEV = { INFO: "info", WARN: "warn", CRITICAL: "critical" };
 
   function analyze(intentInput, opts) {
+    try {
+      return analyzeInner(intentInput, opts);
+    } catch (e) {
+      // A firewall must never crash on hostile input: any unexpected
+      // analysis failure is itself a reason not to sign.
+      return {
+        verdict: "DO_NOT_SIGN",
+        findings: [{
+          severity: SEV.CRITICAL, rule: "analysis-error", title: "Payload could not be fully analyzed",
+          detail: "The analyzer hit an unexpected error (" + (e && e.message ? e.message : e) + "). Treat un-analyzable payloads like undecodable ones: do not sign.",
+        }],
+        parsed: null,
+        flows: null,
+      };
+    }
+  }
+
+  function analyzeInner(intentInput, opts) {
     opts = opts || {};
     const registry = opts.registry || new Map();
     const now = opts.now ? new Date(opts.now) : new Date();
@@ -158,6 +183,7 @@
         const diff = it.diff || {};
         for (const assetId of Object.keys(diff)) {
           const raw = String(diff[assetId]);
+          const rawValid = isIntStr(raw);
           const meta = registry.get(assetId) || null;
           const entry = {
             assetId,
@@ -165,7 +191,7 @@
             known: !!meta,
             symbol: meta ? meta.symbol : assetId,
             blockchain: meta ? meta.blockchain : "?",
-            human: meta ? toHuman(raw.replace("-", ""), meta.decimals) : null,
+            human: meta && rawValid ? toHuman(raw.replace("-", ""), meta.decimals) : null,
             usd: null,
           };
           if (meta && meta.price != null && entry.human != null) {
@@ -174,6 +200,10 @@
           if (!meta) {
             add(SEV.WARN, "unknown-asset", "Unknown asset in the diff: " + assetId,
               "This asset is not in the 1Click token registry. Unlisted assets are a classic scam vector — you may be signing for a worthless look-alike token.");
+          }
+          if (!rawValid) {
+            add(SEV.CRITICAL, "malformed-amount", "Amount for " + assetId + " is not a number",
+              "The diff value for this asset is " + JSON.stringify(diff[assetId]) + " — not an integer amount in smallest units. A payload with non-numeric amounts is malformed or hostile. Never sign it.");
           }
           if (raw.startsWith("-")) gives.push(entry); else receives.push(entry);
         }
@@ -241,7 +271,7 @@
         add(SEV.CRITICAL, "quote-amount-mismatch", "Amount taken differs from the quote",
           "Quote amountIn is " + q.amountIn + " but the payload takes " + qGive.raw.replace("-", "") + " (smallest units). Never sign for a different amount than you approved.");
       }
-      if (qRecv && q.minAmountOut) {
+      if (qRecv && q.minAmountOut && isIntStr(qRecv.raw) && isIntStr(String(q.minAmountOut))) {
         if (BigInt(qRecv.raw) < BigInt(q.minAmountOut)) {
           add(SEV.CRITICAL, "below-min-out", "You receive LESS than the quote's guaranteed minimum",
             "Payload credits " + qRecv.raw + " but the quote's minAmountOut is " + q.minAmountOut + " (smallest units). The solver is keeping the difference.");
