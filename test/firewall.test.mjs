@@ -115,4 +115,15 @@ check("garbage -> DO_NOT_SIGN with decode finding", () => {
   assert.ok(rules(r).includes("decode"));
 });
 
+// 7 — malformed diff amounts -> DO_NOT_SIGN with malformed-amount, never a throw
+check("malformed diff amount -> DO_NOT_SIGN with malformed-amount finding", () => {
+  for (const bad of ["abc", "1.5", { x: 1 }]) {
+    const payload = { signer_id: "dave.near", deadline: inMin(30),
+      intents: [{ intent: "token_diff", diff: { [USDC]: bad } }] };
+    const r = FW.analyze(payload, { registry });
+    assert.strictEqual(r.verdict, "DO_NOT_SIGN", "bad=" + JSON.stringify(bad));
+    assert.ok(rules(r).includes("malformed-amount"), "bad=" + JSON.stringify(bad));
+  }
+});
+
 console.log("\nAll " + passed + " checks passed");
